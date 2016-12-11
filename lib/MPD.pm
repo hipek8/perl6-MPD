@@ -1,30 +1,41 @@
 use v6;
 use NativeCall;
+use MPD::Song;
+use MPD::NativeSymbols;
 
 class MPD {
     class Connection is repr('CPointer') {};
-    class Song       is repr('CPointer') {};
     class Status     is repr('CPointer') {};
 
     has OpaquePointer $!conn;
-
-    method new(Str $host, Int $port) {
-        my $conn = mpd_connection_new($host, $port);
+    has $!keep-alive-supply;
+    method new(Str $host = "127.0.0.1", Int $port = 6600, Int $timeout = 10000, Bool :$keep-alive = True) {
+        my $conn = mpd_connection_new($host, $port, $timeout);
         if mpd_connection_get_error($conn) {
             die mpd_connection_get_error_message($conn);
         }
-        self.bless(*, :$conn);
+        
+        # quick and dirty keep-alive to prevent sefgaults from closed connection
+        # older versions of libmpdclient don't support mpd_connection_set_keepalive
+        my $keep-alive-supply;
+        if $keep-alive {
+            $keep-alive-supply = Supply.interval(5);
+            $keep-alive-supply.tap( -> $v { 
+                my $s = mpd_run_status($conn);
+                mpd_status_free($s);
+            }); 
+        }
+        self.bless(:$conn, :$keep-alive-supply);
     }
 
-    submethod BUILD (:$!conn) {}
+    submethod BUILD (:$!conn,:$!keep-alive-supply) {}
+
 
     method current-song {
-        # TODO: a proper Song object
-        my $s = mpd_run_current_song($!conn);
-        my $ret = mpd_song_get_id($s);
-        $ret ~= ": " ~ mpd_song_get_uri($s);
-        mpd_song_free($s);
-        return $ret;
+        my $song-ptr = mpd_run_current_song($!conn);
+        my $song = song($song-ptr);
+        mpd_song_free($song-ptr);
+        return $song;
     }
 
     method state {
@@ -33,47 +44,28 @@ class MPD {
         mpd_status_free($s);
         return <unknown stop play pause>[$r];
     }
+    method play { mpd_run_play($!conn); }
+    method pause { mpd_send_toggle_pause($!conn); }
+    method toggle { mpd_run_toggle_pause($!conn); }
+    method stop { mpd_run_stop($!conn); }
+    method next { mpd_run_next($!conn); }
+    method previous { mpd_run_previous($!conn); }
+    method update { mpd_run_update($!conn, Str); }
+    method search(Str :f(:$file), :t(:%tags), Bool :a(:$add)) {
+        $add 
+            ?? mpd_search_add_db_songs($!conn, False)
+            !! mpd_search_db_songs($!conn, False);
+
+        #TODO: add tag support
+        
+        mpd_search_add_uri_constraint($!conn, 0, $file) with $file;
+
+        mpd_search_commit($!conn);
+    }
+    method add($file) {
+        self.search(:$file, :a);
+    }
 }
 
-sub mpd_connection_new(Str $host, Int $port)
-    returns OpaquePointer
-    is native('libmpdclient') { ... }
-
-sub mpd_connection_free(OpaquePointer)
-    is native('libmpdclient') { ... }
-
-sub mpd_connection_get_error(OpaquePointer)
-    returns Int
-    is native('libmpdclient') { ... }
-
-sub mpd_connection_get_error_message(OpaquePointer)
-    returns Str
-    is native('libmpdclient') { ... }
-
-sub mpd_run_current_song(OpaquePointer)
-    returns OpaquePointer
-    is native('libmpdclient') { ... }
-
-sub mpd_song_free(OpaquePointer)
-    is native('libmpdclient') { ... }
-
-sub mpd_song_get_uri(OpaquePointer)
-    returns Str
-    is native('libmpdclient') { ... }
-
-sub mpd_song_get_id(OpaquePointer)
-    returns Int
-    is native('libmpdclient') { ... }
-
-sub mpd_run_status(OpaquePointer)
-    returns OpaquePointer
-    is native('libmpdclient') { ... }
-
-sub mpd_status_free(OpaquePointer)
-    is native('libmpdclient') { ... }
-
-sub mpd_status_get_state(OpaquePointer)
-    returns Int
-    is native('libmpdclient') { ... }
 
 # vim: ft=perl6

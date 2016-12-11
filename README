@@ -1,1 +1,14 @@
 Don't get too excited, almost nothing works yet
+
+UP: Basic controls should work now
+
+    use MPD;
+    my MPD $mp .= new;
+    $mp.next;
+    $mp.previous;
+    $mp.toggle;
+    $mp.stop;
+    $mp.play;
+    say $mp.current-song;
+    $mp.add('song.mp3');
+
